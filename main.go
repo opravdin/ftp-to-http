@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,7 +20,8 @@ const (
 	defaultPort = "21"
 )
 
-var allowed = make(map[string]url.URL, 10)
+var allowed sync.Map
+
 var accessKey string
 
 func get(w http.ResponseWriter, req *http.Request) {
@@ -31,8 +33,15 @@ func get(w http.ResponseWriter, req *http.Request) {
 	query := req.URL.Query()
 	token := query.Get("token")
 
-	item, exists := allowed[token]
+	itemAny, exists := allowed.Load(token)
 	if !exists {
+		fmt.Fprint(w, "Not found")
+		return
+	}
+	item, ok := itemAny.(url.URL)
+	if !ok {
+		log.Printf("invalid structure in map by key %s", token)
+		allowed.Delete(token)
 		fmt.Fprint(w, "Not found")
 		return
 	}
@@ -64,7 +73,7 @@ func get(w http.ResponseWriter, req *http.Request) {
 
 	io.Copy(w, res)
 
-	delete(allowed, token)
+	allowed.Delete(token)
 	if err := c.Quit(); err != nil {
 		log.Print(err)
 		return
@@ -85,20 +94,20 @@ func open(w http.ResponseWriter, req *http.Request) {
 
 	u, err := url.Parse(req.FormValue("url"))
 	if err != nil {
-		log.Fatal(err)
+		log.Print(err)
 		fmt.Fprint(w, "Invalid file URL")
 		return
 	}
 
 	key, err := uuid.NewRandom()
 	if err != nil {
-		log.Fatal(err)
+		log.Print(err)
 		fmt.Fprint(w, "Internal error")
 		return
 	}
 
 	strkey := key.String()
-	allowed[strkey] = *u
+	allowed.Store(strkey, *u)
 
 	w.Header().Set("Content-Type", "application/json")
 	resp := make(map[string]string)
@@ -106,7 +115,7 @@ func open(w http.ResponseWriter, req *http.Request) {
 
 	jsonResp, err := json.Marshal(resp)
 	if err != nil {
-		log.Fatalf("Error happened in JSON marshal. Err: %s", err)
+		log.Printf("Error happened in JSON marshal. Err: %s", err)
 		fmt.Fprint(w, "Internal error")
 	}
 	w.Write(jsonResp)
